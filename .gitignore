@@ -22,6 +22,8 @@ MANIFEST
 .vscode
 pip-wheel-metadata
 data
+!examples/microscope_models/data/
+!examples/microscope_models/data/microscope_design_curves.npz
 *Thumbs.db
 *.DS_Store
 *.idea
