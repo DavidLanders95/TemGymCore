@@ -23,8 +23,10 @@ from temgym_core.components import (
     MagneticPhaseSample,
     RandomPhaseSample,
     sample_interpolant,
+    AtomicPotential,
 )
 from temgym_core.gaussian import make_gaussian
+from temgym_core.potential import Si
 from temgym_core.ray import Ray
 from temgym_core.utils import custom_jacobian_matrix
 from temgym_core.run import run_to_end
@@ -83,6 +85,33 @@ def test_sample_interpolant_ray_passthrough_for_solver_paths():
     assert ray_out.dx == pytest.approx(ray_in.dx)
     assert ray_out.dy == pytest.approx(ray_in.dy)
     assert ray_out.z == pytest.approx(ray_in.z)
+
+
+def test_atomic_potential_gaussian_center_has_finite_taylor_update():
+    atom = AtomicPotential(
+        atom_xyz=jnp.array([0.0, 0.0, 0.0]),
+        element_params=Si,
+        cutoff_radius=0.05,
+    )
+    ray_in = make_gaussian(
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        voltage=100e3,
+        waist_x=0.2,
+        waist_y=0.2,
+        wavelength_unit="angstrom",
+    )
+
+    ray_out = atom(ray_in)
+
+    for field in ("x", "y", "dx", "dy", "pathlength", "amplitude", "Q_inv"):
+        assert np.all(np.isfinite(np.asarray(getattr(ray_out, field))))
+
+    xy = jnp.array([[0.0, 0.0], [0.1, 0.0]])
+    phase = atom.phase_shift(xy, ray_in.z, ray_in.sigma, ray_in.k)
+    assert np.asarray(phase).shape == (2,)
+    assert np.all(np.isfinite(np.asarray(phase)))
 
 
 def test_rotated_sample_coordinate_helpers_are_shared_consistently():

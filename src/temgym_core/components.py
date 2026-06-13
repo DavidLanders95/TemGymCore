@@ -28,7 +28,7 @@ from .aberrations import (
 )
 from .constants import compute_Rc_from_voltage, effective_accelerating_potential
 from .grid import Grid
-from .potential import potential_smoothed
+from .potential import potential_smoothed_from_r2
 from .ray import Ray
 from .tree_utils import HasParamsMixin
 
@@ -1438,12 +1438,20 @@ class AtomicPotential(Component):
 
     def phase_shift(self, xy: jnp.ndarray, z, sigma, k: float) -> complex:
         x, y = xy[..., 0], xy[..., 1]
-        r = jnp.sqrt(
+        r2 = (
             (x - self.atom_xyz[0]) ** 2
             + (y - self.atom_xyz[1]) ** 2
             + (z - self.atom_xyz[2]) ** 2
         )
-        V = potential_smoothed(r, self.element_params, self.cutoff_radius)
+        def _potential_from_r2(value):
+            return potential_smoothed_from_r2(
+                value, self.element_params, self.cutoff_radius
+            )
+
+        if jnp.asarray(r2).ndim == 0:
+            V = _potential_from_r2(r2)
+        else:
+            V = jax.vmap(_potential_from_r2)(jnp.ravel(r2)).reshape(jnp.shape(r2))
         interaction_constant = sigma / k
         return -interaction_constant * V
 

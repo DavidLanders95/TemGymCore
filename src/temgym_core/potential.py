@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import jax
+from jax import lax
 from scipy.special import j0
 from jax.scipy.integrate import trapezoid
 from scipy.integrate import simpson
@@ -117,6 +118,35 @@ def potential_smoothed(r, p, r_pix):
     V_eff = jnp.where(rr <= r1, V_core_vals, V_vals)
 
     return V_eff
+
+
+def potential_smoothed_from_r2(r2, p, r_pix):
+    """Smoothed atomic potential from squared radius with finite derivatives.
+
+    The spline core in ``potential_smoothed`` is a polynomial in ``r**2``.
+    Evaluating that branch directly avoids differentiating ``sqrt(r2)`` at
+    ``r2 == 0`` for Gaussian beams centred exactly on an atom.
+    """
+
+    r1 = 2.0 * r_pix
+    r1_2 = r1 * r1
+    V_max = potential(r_pix, p)
+
+    V1 = potential(r1, p)
+    d1 = dV_dr(r1, p)
+
+    DeltaV = V1 - V_max
+    a = 2.0 * DeltaV - 0.5 * d1 * r1
+    b = 0.5 * d1 * r1 - DeltaV
+
+    def core(_):
+        y = r2 / r1_2
+        return V_max + a * y + b * y**2
+
+    def outer(_):
+        return potential(jnp.sqrt(r2), p)
+
+    return lax.cond(r2 <= r1_2, core, outer, operand=None)
 
 
 def chi_of_b(b, p, sigma):

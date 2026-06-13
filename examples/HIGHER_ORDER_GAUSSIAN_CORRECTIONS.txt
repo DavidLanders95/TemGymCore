@@ -1,0 +1,113 @@
+Higher-Order Gaussian Correction Notes
+======================================
+
+This note summarizes the current higher-order correction path for nonlinear
+phase elements such as aberrated lenses and atomic slices.
+
+What already existed
+--------------------
+
+`GaussianActionComponent` already applies a second-order local action update:
+
+- phase value updates path length,
+- phase gradient updates beam slope,
+- phase Hessian updates `Q_inv`.
+
+That is exact for constant, linear, and quadratic phase elements. Errors come
+from cubic and higher phase residual across each Gaussian support.
+
+Added diagnostics and operators
+-------------------------------
+
+The new `temgym_core.gaussian_corrections` module adds:
+
+- `quadratic_residual_on_beam`: autodiff Taylor residual for the actual current
+  second-order model.
+- `sampled_quadratic_residual_on_beam`: cheap best-fit quadratic residual for
+  expensive or branchy phase functions.
+- `fit_quadratic_action_on_beam` and `apply_fitted_quadratic_action`: sample a
+  nonlinear action over the beam support, fit the best local quadratic, and
+  apply that fitted operator as one Gaussian.
+- `split_gaussian_realspace` and `split_gaussian_bundle`: split already
+  propagated Gaussians with a fitted local Gaussian window partition. The
+  default 5x5 split reconstructs a representative curved anisotropic parent
+  Gaussian with about 1 percent field error over its significant support.
+
+Aberrated aperture probe result
+-------------------------------
+
+CPU-sized stress test:
+
+- 300 kV, aperture radius 0.15 um, waist 0.05 um, focal length 5 mm.
+- Strong Krivanek coefficients: `C21=300`, `C23=120`, `C32=150`, `C43=150`.
+- 114 input beams, 64x64 FFT comparison grid.
+
+Measured at the lens plane:
+
+- sampled residual median/p90/max: 0.642/0.642/0.642 rad.
+- 5x5 split with child width 0.6 reduced the worst child residual to about
+  0.139 rad.
+- beam count increased from 114 to 2850.
+- CPU split construction took about 16 s; field evaluation took about 1.6 s.
+- FFT-aligned field error improved from 0.895 to 0.849.
+- normalized intensity error improved from 0.868 to 0.803.
+
+Conclusion: splitting reduces the local non-quadratic aberration error, but for
+large aberrations it is not enough by itself. The cost is a 25x beam-count
+increase per split level, so recursive splitting should be adaptive and
+thresholded. Large global FFT mismatch also reflects source decomposition,
+sampling, and caustic/interference structure, not only one lens-plane residual.
+
+Atomic slice result
+-------------------
+
+A centered Gaussian on the existing smoothed Si atom exposed two important
+points.
+
+First, differentiating `sqrt(x^2 + y^2 + z^2)` at the atom center produced NaNs
+in the Taylor kick. `AtomicPotential` now evaluates the smoothed core from
+`r^2`, preserving finite value, gradient, and Hessian at the atom center.
+
+Second, derivative Taylor expansion at the atom center is a poor model even for
+a weak thin slice, because the core curvature is set by a very small smoothing
+radius. For a 100 kV, waist 0.5 angstrom beam and a 0.05 angstrom Si slice:
+
+- current Taylor-at-center Gaussian field error: 0.605.
+- one fitted quadratic action, no splitting: 5.1e-4.
+- 5x5 split plus Taylor children: 0.0475.
+- 5x5 split plus fitted quadratic children: 0.0098.
+
+Conclusion: for atomic potentials, the first correction should be local sampled
+quadratic fitting, not Hermite modes or immediate recursive splitting. Splitting
+is still useful when the fitted residual remains large, but fitting one Gaussian
+is far cheaper and more accurate for the central atom-core case tested here.
+
+Practical recommendation
+------------------------
+
+Use this hierarchy per nonlinear element:
+
+1. For smooth optical phases, keep the existing Taylor Hessian update.
+2. Estimate actual Taylor residual where autodiff is cheap.
+3. For expensive or sharp potentials, estimate sampled best-fit residual.
+4. For atoms, prefer `apply_fitted_quadratic_action` over center Taylor.
+5. Split only beams whose fitted or Taylor residual remains above about
+   0.1-0.3 rad over the significant support.
+6. Refit children after splitting for atomic slices.
+
+Small plane-of-atoms diagnostic
+-------------------------------
+
+`examples/atoms/fitted_atom_slice_diagnostic.py` compares a fitted Gaussian
+slice operator with a one-slice FFT/multislice-style reference for a 2x2 plane
+of Si atoms, followed by 2 angstrom of Fresnel propagation.
+
+CPU baseline from this environment:
+
+- TEM-like broad beam: 16 Gaussians, aligned field error 0.0040, about 14 s.
+- STEM-like focused probe: 1 Gaussian, aligned field error 1.8e-6, about 1 s.
+
+This is intentionally a small diagnostic, not a production multislice runner.
+The next optimization is to batch the fitted least-squares operator over beams
+so the TEM case can scale beyond tens of Gaussians without Python-loop compile
+cost.
