@@ -232,11 +232,20 @@ def biprism_matrix_5x5(biprism_deflection, xp=sp):
 
 def double_deflector_matrix_5x5(
     spacing,
-    drive_x,
-    drive_y,
+    drive_x=None,
+    drive_y=None,
     balance_x=1.0,
     balance_y=1.0,
     xp=sp,
+    *,
+    shift_x=None,
+    shift_y=None,
+    tilt_x=0.0,
+    tilt_y=0.0,
+    shift_balance_x=None,
+    shift_balance_y=None,
+    tilt_balance_x=None,
+    tilt_balance_y=None,
 ):
     """
     5x5 matrix for two deflector kicks separated by free-space spacing.
@@ -244,9 +253,32 @@ def double_deflector_matrix_5x5(
     Built as D2 @ P(spacing) @ D1, where:
       D1 adds [drive_x, drive_y] to [theta_x, theta_y],
       D2 adds [-balance_x*drive_x, -balance_y*drive_y].
+
+    The current DoubleDeflector API separates shift and tilt drives with
+    independent balance factors; those names are accepted as keyword aliases.
     """
-    def2_x = -balance_x * drive_x
-    def2_y = -balance_y * drive_y
+    uses_shift_tilt = shift_x is not None or shift_y is not None
+    if uses_shift_tilt:
+        if drive_x is not None or drive_y is not None:
+            raise ValueError(
+                "Use either drive_x/drive_y or shift_x/shift_y aliases, not both."
+            )
+        shift_x = 0.0 if shift_x is None else shift_x
+        shift_y = 0.0 if shift_y is None else shift_y
+        shift_balance_x = balance_x if shift_balance_x is None else shift_balance_x
+        shift_balance_y = balance_y if shift_balance_y is None else shift_balance_y
+        tilt_balance_x = balance_x if tilt_balance_x is None else tilt_balance_x
+        tilt_balance_y = balance_y if tilt_balance_y is None else tilt_balance_y
+
+        drive_x = shift_x + tilt_x
+        drive_y = shift_y + tilt_y
+        def2_x = -shift_balance_x * shift_x - tilt_balance_x * tilt_x
+        def2_y = -shift_balance_y * shift_y - tilt_balance_y * tilt_y
+    else:
+        if drive_x is None or drive_y is None:
+            raise ValueError("`drive_x` and `drive_y` are required.")
+        def2_x = -balance_x * drive_x
+        def2_y = -balance_y * drive_y
 
     if xp == sp:
         d1 = xp.Matrix([

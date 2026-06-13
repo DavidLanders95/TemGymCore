@@ -84,6 +84,18 @@ def _regularize_L2k(
     return L2k - shift * jnp.eye(2, dtype=L2k.dtype)
 
 
+def _is_batched_gaussian(ray: GaussianBeam) -> bool:
+    return jnp.asarray(ray.r_xy).ndim > 1
+
+
+def _matvec(matrix: jnp.ndarray, vector: jnp.ndarray) -> jnp.ndarray:
+    return jnp.einsum("ij,...j->...i", matrix, vector)
+
+
+def _rotate_quadratic_form(rotation: jnp.ndarray, q_inv: jnp.ndarray) -> jnp.ndarray:
+    return jnp.einsum("ji,...jk,kl->...il", rotation, q_inv, rotation)
+
+
 class GaussianActionComponent(Component):
     """Mixin for components defined by an action (phase + log-transmission).
 
@@ -119,6 +131,11 @@ class GaussianActionComponent(Component):
         return self.phase_shift(xy) - 1j * (L / k)
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
+        if _is_batched_gaussian(ray):
+            return jax.vmap(self._call_gaussian_single)(ray.to_vector())
+        return self._call_gaussian_single(ray)
+
+    def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
         xy_ref = ray.r_xy
         k = ray.k
 
@@ -354,6 +371,11 @@ class SeidelLens(Lens):
         return self.phase_shift(xy, dxy) - 1j * (L / k)
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
+        if _is_batched_gaussian(ray):
+            return jax.vmap(self._call_gaussian_single)(ray.to_vector())
+        return self._call_gaussian_single(ray)
+
+    def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
         dS0, dS1, dS2 = taylor_expand(
             self.complex_action,
             ray.r_xy,
@@ -660,15 +682,15 @@ class Rotator(Component):
         cos_a, sin_a = self._rotation()
         R = jnp.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=jnp.float64)
 
-        r_xy_rot = R @ ray.r_xy
-        d_xy_rot = R @ ray.d_xy
-        Q_rot = R.T @ ray.Q_inv @ R
+        r_xy_rot = _matvec(R, ray.r_xy)
+        d_xy_rot = _matvec(R, ray.d_xy)
+        Q_rot = _rotate_quadratic_form(R, ray.Q_inv)
 
         return ray.derive(
-            x=r_xy_rot[0],
-            y=r_xy_rot[1],
-            dx=d_xy_rot[0],
-            dy=d_xy_rot[1],
+            x=r_xy_rot[..., 0],
+            y=r_xy_rot[..., 1],
+            dx=d_xy_rot[..., 0],
+            dy=d_xy_rot[..., 1],
             Q_inv=Q_rot,
         )
 
@@ -865,6 +887,9 @@ class ElectromagneticLens(Component):
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
         from .gaussian import FreeSpacePropagator
 
+        if _is_batched_gaussian(ray):
+            return jax.vmap(self._call_gaussian)(ray.to_vector())
+
         voltage = ray.voltage
         f = self.focal_length(voltage)
         D = self.thickness
@@ -911,15 +936,15 @@ class ElectromagneticLens(Component):
         sin_a = jnp.sin(angle)
         R = jnp.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=jnp.float64)
 
-        r_xy_rot = R @ out.r_xy
-        d_xy_rot = R @ out.d_xy
-        Q_rot = R.T @ out.Q_inv @ R
+        r_xy_rot = _matvec(R, out.r_xy)
+        d_xy_rot = _matvec(R, out.d_xy)
+        Q_rot = _rotate_quadratic_form(R, out.Q_inv)
 
         return out.derive(
-            x=r_xy_rot[0],
-            y=r_xy_rot[1],
-            dx=d_xy_rot[0],
-            dy=d_xy_rot[1],
+            x=r_xy_rot[..., 0],
+            y=r_xy_rot[..., 1],
+            dx=d_xy_rot[..., 0],
+            dy=d_xy_rot[..., 1],
             Q_inv=Q_rot,
         )
 
@@ -980,8 +1005,10 @@ class ABCDTransfer(Component):
         denom = A + matmat(B, Q)
         numer = C + matmat(D, Q)
         eye = jnp.eye(2, dtype=jnp.complex128)
-        inv_denom = jnp.linalg.solve(jnp.swapaxes(denom, -1, -2), eye)
-        inv_denom = jnp.swapaxes(inv_denom, -1, -2)
+        inv_denom = jnp.linalg.solve(
+            denom,
+            jnp.broadcast_to(eye, denom.shape),
+        )
         Q_new = jnp.einsum("...ij,...jk->...ik", numer, inv_denom)
 
         return ray.derive(
@@ -1431,6 +1458,11 @@ class AtomicPotential(Component):
         return self.phase_shift(xy, z, sigma, k) - 1j * (L / k)
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
+        if _is_batched_gaussian(ray):
+            return jax.vmap(self._call_gaussian_single)(ray.to_vector())
+        return self._call_gaussian_single(ray)
+
+    def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
         dS0, dS1, dS2 = taylor_expand(
             self.complex_action,
             ray.r_xy,

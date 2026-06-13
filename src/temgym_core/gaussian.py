@@ -17,6 +17,112 @@ LENGTH = {
 }
 
 
+def _as_constructor_vector(name: str, value: Any) -> jnp.ndarray:
+    arr = jnp.asarray(value)
+    if arr.ndim == 0:
+        return arr[None]
+    if arr.ndim == 1:
+        return arr
+    raise ValueError(
+        f"`{name}` must be scalar or one-dimensional, got shape {arr.shape}."
+    )
+
+
+def _broadcast_constructor_fields(**fields: Any) -> dict[str, jnp.ndarray]:
+    arrays = {
+        name: _as_constructor_vector(name, value)
+        for name, value in fields.items()
+    }
+    try:
+        shape = jnp.broadcast_shapes(*(arr.shape for arr in arrays.values()))
+    except ValueError as exc:
+        sizes = ", ".join(f"{name}={arr.shape}" for name, arr in arrays.items())
+        raise ValueError(
+            "Gaussian constructor fields must be scalar or share one leading "
+            f"length; got {sizes}."
+        ) from exc
+
+    return {
+        name: jnp.broadcast_to(arr, shape)
+        for name, arr in arrays.items()
+    }
+
+
+def _validate_positive(name: str, value: jnp.ndarray) -> None:
+    try:
+        invalid = bool(jnp.any(value <= 0))
+    except Exception:
+        return
+    if invalid:
+        raise ValueError(f"`{name}` must be positive.")
+
+
+def _field_leading_size(name: str, value: Any) -> int:
+    if isinstance(value, str) or value is None:
+        return 1
+
+    arr = jnp.asarray(value)
+    if name == "Q_inv":
+        if arr.shape == (2, 2):
+            return 1
+        if arr.ndim >= 3 and arr.shape[-2:] == (2, 2):
+            return int(arr.shape[0])
+        raise ValueError(
+            f"`Q_inv` must have shape (2, 2) or (N, 2, 2), got {arr.shape}."
+        )
+
+    if arr.ndim == 0:
+        return 1
+    return int(arr.shape[0])
+
+
+def _common_leading_size(params: dict[str, Any]) -> int:
+    sizes = {
+        _field_leading_size(name, value)
+        for name, value in params.items()
+        if not isinstance(value, str) and value is not None
+    }
+    non_scalar_sizes = {size for size in sizes if size != 1}
+    if len(non_scalar_sizes) > 1:
+        details = ", ".join(
+            f"{name}={_field_leading_size(name, value)}"
+            for name, value in params.items()
+            if not isinstance(value, str) and value is not None
+        )
+        raise ValueError(f"GaussianBeam fields have incompatible leading sizes: {details}.")
+    return next(iter(non_scalar_sizes), 1)
+
+
+def _promote_gaussian_field(name: str, value: Any, size: int) -> Any:
+    if isinstance(value, str) or value is None:
+        return value
+
+    arr = jnp.asarray(value)
+    if name == "Q_inv":
+        if arr.shape == (2, 2):
+            arr = arr[None, ...]
+        elif arr.ndim == 3 and arr.shape[-2:] == (2, 2):
+            pass
+        else:
+            raise ValueError(
+                f"`Q_inv` must have shape (2, 2) or (N, 2, 2), got {arr.shape}."
+            )
+    elif arr.ndim == 0:
+        arr = arr[None]
+
+    if arr.shape[0] == size:
+        return arr
+    if arr.shape[0] == 1:
+        return jnp.broadcast_to(arr, (size,) + arr.shape[1:])
+    raise ValueError(
+        f"`{name}` has leading size {arr.shape[0]}, expected {size} or 1."
+    )
+
+
+def _matmul(left: jnp.ndarray, right: jnp.ndarray) -> jnp.ndarray:
+    return jnp.einsum("...ij,...jk->...ik", left, right)
+
+
 @jdc.pytree_dataclass(kw_only=True)
 class GaussianBeam(Ray):
     amplitude: jnp.ndarray | complex
@@ -57,9 +163,12 @@ class GaussianBeam(Ray):
         )
 
     def to_vector(self) -> jnp.ndarray:
-        params = {}
-        for k, v in dataclasses.asdict(self).items():
-            params[k] = v if isinstance(v, str) or v is None else jnp.atleast_1d(v)
+        params = dataclasses.asdict(self)
+        size = _common_leading_size(params)
+        params = {
+            k: _promote_gaussian_field(k, v, size)
+            for k, v in params.items()
+        }
         return type(self)(**params)
 
     @property
@@ -98,24 +207,48 @@ def make_gaussian(
     rcurv_y=jnp.inf,
     wavelength_unit: str = "m",
 ) -> GaussianBeam:
-    wavelength = energy2wavelength(voltage) / LENGTH[wavelength_unit]
+    if wavelength_unit not in LENGTH:
+        raise ValueError(
+            f"Unknown wavelength unit {wavelength_unit!r}; expected one of "
+            f"{tuple(LENGTH)}."
+        )
 
-    x = jnp.atleast_1d(x)
+    fields = _broadcast_constructor_fields(
+        x=x,
+        y=y,
+        dx=dx,
+        dy=dy,
+        z=z,
+        voltage=voltage,
+        amp=amp,
+        phase=phase,
+        waist_x=waist_x,
+        waist_y=waist_y,
+        rcurv_x=rcurv_x,
+        rcurv_y=rcurv_y,
+    )
+    x = fields["x"]
+    y = fields["y"]
+    dx = fields["dx"]
+    dy = fields["dy"]
+    z = fields["z"]
+    voltage = fields["voltage"]
+    amp = fields["amp"]
+    phase = fields["phase"]
+    waist_x = fields["waist_x"]
+    waist_y = fields["waist_y"]
+    rcurv_x = fields["rcurv_x"]
+    rcurv_y = fields["rcurv_y"]
+
+    _validate_positive("voltage", voltage)
+    _validate_positive("waist_x", waist_x)
+    _validate_positive("waist_y", waist_y)
+
+    wavelength = energy2wavelength(voltage) / LENGTH[wavelength_unit]
     n_rays = x.shape[0]
 
-    def _bcast_to_n(a):
-        a = jnp.atleast_1d(a)
-        return a if a.shape[0] == n_rays else jnp.broadcast_to(a, (n_rays,))
-
-    y = _bcast_to_n(y)
-    dx = _bcast_to_n(dx)
-    dy = _bcast_to_n(dy)
-
-    curv_x = _bcast_to_n(1.0 / rcurv_x)
-    curv_y = _bcast_to_n(1.0 / rcurv_y)
-    waist_x = _bcast_to_n(waist_x)
-    waist_y = _bcast_to_n(waist_y)
-    voltage = _bcast_to_n(voltage)
+    curv_x = 1.0 / rcurv_x
+    curv_y = 1.0 / rcurv_y
 
     Q_inv_re = jnp.zeros((n_rays, 2, 2), dtype=jnp.float64)
     Q_inv_re = Q_inv_re.at[:, 0, 0].set(curv_x)
@@ -127,8 +260,6 @@ def make_gaussian(
 
     Q_inv = (Q_inv_re + 1j * Q_inv_im).astype(jnp.complex128)
 
-    amp = _bcast_to_n(amp)
-    phase = _bcast_to_n(phase)
     amplitude = jnp.asarray(amp) * jnp.exp(1j * phase)
     pathlength = jnp.zeros_like(phase)
 
@@ -202,6 +333,42 @@ def apply_action_delta(
     dS2: jnp.ndarray,
     tiny: float = 1e-30,
 ):
+    if jnp.asarray(ray.r_xy).ndim > 1:
+        ray = ray.to_vector()
+        n = jnp.asarray(ray.x).shape[0]
+
+        def in_axes(value, trailing_ndim: int):
+            arr = jnp.asarray(value)
+            if trailing_ndim == 0:
+                return 0 if arr.ndim == 1 and arr.shape[0] == n else None
+            return (
+                0
+                if arr.ndim == trailing_ndim + 1 and arr.shape[0] == n
+                else None
+            )
+
+        return jax.vmap(
+            lambda ray_i, s0, s1, s2: _apply_action_delta_single(
+                ray_i, s0, s1, s2, tiny=tiny
+            ),
+            in_axes=(
+                0,
+                in_axes(dS0, 0),
+                in_axes(dS1, 1),
+                in_axes(dS2, 2),
+            ),
+        )(ray, dS0, dS1, dS2)
+
+    return _apply_action_delta_single(ray, dS0, dS1, dS2, tiny=tiny)
+
+
+def _apply_action_delta_single(
+    ray: GaussianBeam,
+    dS0: complex,
+    dS1: jnp.ndarray,
+    dS2: jnp.ndarray,
+    tiny: float = 1e-30,
+):
     k = ray.k
     r0 = ray.r_xy
 
@@ -233,7 +400,9 @@ def apply_action_delta(
     )
 
     r_xy_new = r0 + dx
-    S0_new = S0_prime + S1_prime @ dx + 0.5 * (dx @ (Q_prime @ dx))
+    S0_new = S0_prime + jnp.dot(S1_prime, dx) + 0.5 * jnp.dot(
+        dx, Q_prime @ dx
+    )
     S1_new = S1_prime + Q_prime @ dx
     Q_new = Q_prime
 
@@ -271,21 +440,21 @@ class FreeSpacePropagator(BaseGaussianPropagator):
 
         identity = jnp.eye(2, dtype=jnp.complex128)
         A = identity + distance * Q
-        invA = jnp.linalg.solve(A.T, identity).T
+        invA = jnp.linalg.solve(A, jnp.broadcast_to(identity, A.shape))
         detA = jnp.linalg.det(A)
 
-        Q_new = Q @ invA
+        Q_new = _matmul(Q, invA)
         r_xy_new = ray.r_xy + distance * theta
 
-        theta_sq = jnp.dot(theta, theta)
+        theta_sq = jnp.sum(theta * theta, axis=-1)
         pathlength_new = ray.pathlength + distance + 0.5 * distance * theta_sq
         amplitude_new = ray.amplitude * detA**(-0.5)
 
         return ray.derive(
-            x=r_xy_new[0],
-            y=r_xy_new[1],
-            dx=theta[0],
-            dy=theta[1],
+            x=r_xy_new[..., 0],
+            y=r_xy_new[..., 1],
+            dx=theta[..., 0],
+            dy=theta[..., 1],
             z=ray.z + distance,
             amplitude=amplitude_new,
             pathlength=pathlength_new,

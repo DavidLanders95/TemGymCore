@@ -269,6 +269,54 @@ def compute_NI_Gc_from_lens_parameters(
     return NI, Gc
 
 
+def compute_I0_Gc_from_focal_rotation(
+    focal_length: float,
+    rotation_angle: float,
+    Rc: float,
+) -> tuple[float, float]:
+    """Backward-compatible name for computing excitation and geometry constant."""
+    return compute_NI_Gc_from_lens_parameters(
+        focal_length=focal_length,
+        rotation_angle=rotation_angle,
+        Rc=Rc,
+    )
+
+
+def compute_I0_Cf_from_focal_rotation(
+    focal_length: float,
+    rotation_angle: float,
+    Rc: float,
+) -> tuple[float, float]:
+    """Deprecated alias of :func:`compute_I0_Gc_from_focal_rotation`."""
+    warnings.warn(
+        "`compute_I0_Cf_from_focal_rotation` is deprecated; use "
+        "`compute_I0_Gc_from_focal_rotation`.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return compute_I0_Gc_from_focal_rotation(
+        focal_length=focal_length,
+        rotation_angle=rotation_angle,
+        Rc=Rc,
+    )
+
+
+def compute_I0_from_focal_length(focal_length: float, Gc: float) -> float:
+    """Compute electromagnetic lens excitation from focal length and Gc."""
+    if focal_length <= 0:
+        raise ValueError("focal_length must be > 0.")
+    if Gc <= 0:
+        raise ValueError("Gc must be > 0.")
+    return 1.0 / jnp.sqrt(Gc * focal_length)
+
+
+def compute_I0_from_rotation(rotation_angle: float, Rc: float) -> float:
+    """Compute electromagnetic lens excitation from rotation angle and Rc."""
+    if Rc == 0:
+        raise ValueError("Rc must be non-zero.")
+    return rotation_angle / Rc
+
+
 def compute_rotation_angle_Gc_from_NI_focal_length(
     NI: float, focal_length: float, Rc: float
 ) -> tuple[float, float]:
