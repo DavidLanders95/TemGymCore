@@ -14,6 +14,7 @@ from temgym_core.components import (
 from temgym_core.constants import energy2wavelength
 from temgym_core.evaluate import evaluate_gaussians_for, evaluate_gaussians_jax_scan
 from temgym_core.gaussian import FreeSpacePropagator, make_gaussian
+from temgym_core.run import run_to_end
 
 
 jax.config.update("jax_enable_x64", True)
@@ -119,3 +120,19 @@ def test_gaussian_evaluators_agree_for_batched_beam():
         rtol=1e-12,
         atol=1e-12,
     )
+
+
+def test_run_to_end_handles_batched_gaussian_with_vector_z():
+    beam = _batched_beam()
+    detector = Detector(z=0.015, pixel_size=(1e-6, 1e-6), shape=(5, 4))
+
+    out_batch = run_to_end(beam, (detector,))
+    out_items = [run_to_end(beam[i], (detector,)) for i in range(np.asarray(beam.x).size)]
+
+    for field in ("x", "y", "z", "pathlength", "amplitude", "Q_inv"):
+        actual = np.asarray(getattr(out_batch, field))
+        expected = np.stack(
+            [np.asarray(getattr(out_item, field)) for out_item in out_items],
+            axis=0,
+        )
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)

@@ -290,6 +290,7 @@ def test_scalar_grad_hessian_function():
     np.testing.assert_allclose(np.asarray(hess), 0.0, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.slow
 def test_gaussian_free_space():
     voltage = 0.6e-5
     w0x, w0y = 0.35e-3, 0.25e-3
@@ -333,6 +334,7 @@ def test_gaussian_free_space():
     plt.close(fig)
 
 
+@pytest.mark.slow
 def test_gaussian_constant_phase_shift_vs_fresnel():
     voltage = 6.0165e-6
     w0x, w0y = 0.35e-3, 0.25e-3
@@ -379,6 +381,7 @@ def test_gaussian_constant_phase_shift_vs_fresnel():
     plt.close(fig)
 
 
+@pytest.mark.slow
 def test_gaussian_linear_phase_shift_vs_fresnel():
     voltage = 6.0165e-6  # 500 e-9 m wavelength
     w0x, w0y = 0.35e-3, 0.25e-3
@@ -425,6 +428,7 @@ def test_gaussian_linear_phase_shift_vs_fresnel():
     plt.close(fig)
 
 
+@pytest.mark.slow
 def test_gaussian_quadratic_phase_shift_vs_fresnel():
     voltage = 6.0165e-6  # 500 e-9 m wavelength
     w0x, w0y = 0.35e-3, 0.25e-3
@@ -616,6 +620,7 @@ def test_fourier_transform_ABCD_matrix_updates_against_stepwise():
 
 
 # @pytest.mark.skip(reason='ABCD for new propagator not yet implemented')
+@pytest.mark.slow
 def test_gaussian_free_space_vs_fresnel():
     propagation_distance = 20
     pixel_size = (0.000005, 0.000005)
@@ -698,6 +703,7 @@ def test_gaussian_free_space_vs_fresnel():
     )
 
 
+@pytest.mark.slow
 def test_gaussian_lens_vs_fresnel():
     M = -2
     f = 5e-3
@@ -823,6 +829,7 @@ def test_gaussian_lens_vs_fresnel():
     )
 
 
+@pytest.mark.slow
 def test_gaussian_two_beam_interference_vs_fresnel():
     pixel_size = (1e-5, 1e-5)
     shape = (2048, 2048)

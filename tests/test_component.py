@@ -20,6 +20,8 @@ from temgym_core.components import (
     ElectromagneticLens,
     Rotator,
     InterpolatedSample2D,
+    MagneticPhaseSample,
+    RandomPhaseSample,
     sample_interpolant,
 )
 from temgym_core.gaussian import make_gaussian
@@ -81,6 +83,34 @@ def test_sample_interpolant_ray_passthrough_for_solver_paths():
     assert ray_out.dx == pytest.approx(ray_in.dx)
     assert ray_out.dy == pytest.approx(ray_in.dy)
     assert ray_out.z == pytest.approx(ray_in.z)
+
+
+def test_rotated_sample_coordinate_helpers_are_shared_consistently():
+    kwargs = dict(
+        strength=1.0,
+        width=2.0,
+        height=4.0,
+        x0=0.5,
+        y0=-0.25,
+        theta=np.pi / 2,
+        edge_sharpness=4.0,
+    )
+    magnetic = MagneticPhaseSample(**kwargs)
+    random = RandomPhaseSample(**kwargs)
+    xy = jnp.array([[0.5, 0.75], [-0.5, -0.25]])
+
+    mag_u, mag_v = magnetic._local_coords(xy)
+    rand_u, rand_v = random._local_coords(xy)
+
+    np.testing.assert_allclose(np.asarray(mag_u), np.asarray([1.0, 0.0]), atol=1e-12)
+    np.testing.assert_allclose(np.asarray(mag_v), np.asarray([0.0, 1.0]), atol=1e-12)
+    np.testing.assert_allclose(np.asarray(rand_u), np.asarray(mag_u), atol=1e-12)
+    np.testing.assert_allclose(np.asarray(rand_v), np.asarray(mag_v), atol=1e-12)
+    np.testing.assert_allclose(
+        np.asarray(magnetic._soft_indicator(mag_u, 1.0)),
+        np.asarray(random._soft_indicator(rand_u, 1.0)),
+        atol=1e-12,
+    )
 
 
 @jdc.pytree_dataclass

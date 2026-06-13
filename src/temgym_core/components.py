@@ -92,8 +92,38 @@ def _matvec(matrix: jnp.ndarray, vector: jnp.ndarray) -> jnp.ndarray:
     return jnp.einsum("ij,...j->...i", matrix, vector)
 
 
+def _matmat(matrix: jnp.ndarray, tensor: jnp.ndarray) -> jnp.ndarray:
+    return jnp.einsum("ij,...jk->...ik", matrix, tensor)
+
+
 def _rotate_quadratic_form(rotation: jnp.ndarray, q_inv: jnp.ndarray) -> jnp.ndarray:
     return jnp.einsum("ji,...jk,kl->...il", rotation, q_inv, rotation)
+
+
+def _call_single_or_batched_gaussian(ray: GaussianBeam, single_call):
+    if _is_batched_gaussian(ray):
+        return jax.vmap(single_call)(ray.to_vector())
+    return single_call(ray)
+
+
+def _rotated_local_coords(xy, x0: float, y0: float, theta: float):
+    x = xy[..., 0] - x0
+    y = xy[..., 1] - y0
+    c = jnp.cos(theta)
+    s = jnp.sin(theta)
+    u = c * x + s * y
+    v = -s * x + c * y
+    return u, v
+
+
+def _soft_indicator(coord, half_extent: float, sharpness: float):
+    pos = jax.nn.sigmoid(sharpness * (coord + half_extent))
+    neg = jax.nn.sigmoid(sharpness * (coord - half_extent))
+    plateau = jax.nn.sigmoid(sharpness * half_extent) - jax.nn.sigmoid(
+        -sharpness * half_extent
+    )
+    plateau = jnp.maximum(plateau, 1e-9)
+    return (pos - neg) / plateau
 
 
 class GaussianActionComponent(Component):
@@ -131,9 +161,7 @@ class GaussianActionComponent(Component):
         return self.phase_shift(xy) - 1j * (L / k)
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
-        if _is_batched_gaussian(ray):
-            return jax.vmap(self._call_gaussian_single)(ray.to_vector())
-        return self._call_gaussian_single(ray)
+        return _call_single_or_batched_gaussian(ray, self._call_gaussian_single)
 
     def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
         xy_ref = ray.r_xy
@@ -371,9 +399,7 @@ class SeidelLens(Lens):
         return self.phase_shift(xy, dxy) - 1j * (L / k)
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
-        if _is_batched_gaussian(ray):
-            return jax.vmap(self._call_gaussian_single)(ray.to_vector())
-        return self._call_gaussian_single(ray)
+        return _call_single_or_batched_gaussian(ray, self._call_gaussian_single)
 
     def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
         dS0, dS1, dS2 = taylor_expand(
@@ -885,10 +911,10 @@ class ElectromagneticLens(Component):
         return self._apply_rotation_ray(out, self.rotation_angle(voltage))
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
-        from .gaussian import FreeSpacePropagator
+        return _call_single_or_batched_gaussian(ray, self._call_gaussian_single)
 
-        if _is_batched_gaussian(ray):
-            return jax.vmap(self._call_gaussian)(ray.to_vector())
+    def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
+        from .gaussian import FreeSpacePropagator
 
         voltage = ray.voltage
         f = self.focal_length(voltage)
@@ -967,14 +993,11 @@ class ABCDTransfer(Component):
         C = jnp.asarray(self.C, dtype=jnp.float64)
         D = jnp.asarray(self.D, dtype=jnp.float64)
 
-        def matvec(m, v):
-            return jnp.einsum("ij,...j->...i", m, v)
-
         r_xy = ray.r_xy
         d_xy = ray.d_xy
 
-        r_xy_new = matvec(A, r_xy) + matvec(B, d_xy)
-        d_xy_new = matvec(C, r_xy) + matvec(D, d_xy)
+        r_xy_new = _matvec(A, r_xy) + _matvec(B, d_xy)
+        d_xy_new = _matvec(C, r_xy) + _matvec(D, d_xy)
 
         return ray.derive(
             x=r_xy_new[..., 0],
@@ -989,21 +1012,15 @@ class ABCDTransfer(Component):
         C = jnp.asarray(self.C, dtype=jnp.float64)
         D = jnp.asarray(self.D, dtype=jnp.float64)
 
-        def matvec(m, v):
-            return jnp.einsum("ij,...j->...i", m, v)
-
-        def matmat(m, x):
-            return jnp.einsum("ij,...jk->...ik", m, x)
-
         r_xy = ray.r_xy
         d_xy = ray.d_xy
 
-        r_xy_new = matvec(A, r_xy) + matvec(B, d_xy)
-        d_xy_new = matvec(C, r_xy) + matvec(D, d_xy)
+        r_xy_new = _matvec(A, r_xy) + _matvec(B, d_xy)
+        d_xy_new = _matvec(C, r_xy) + _matvec(D, d_xy)
 
         Q = ray.Q_inv
-        denom = A + matmat(B, Q)
-        numer = C + matmat(D, Q)
+        denom = A + _matmat(B, Q)
+        numer = C + _matmat(D, Q)
         eye = jnp.eye(2, dtype=jnp.complex128)
         inv_denom = jnp.linalg.solve(
             denom,
@@ -1215,21 +1232,10 @@ class MagneticPhaseSample(GaussianActionComponent):
         )
 
     def _local_coords(self, xy):
-        x = xy[..., 0] - self.x0
-        y = xy[..., 1] - self.y0
-        c = jnp.cos(self.theta)
-        s = jnp.sin(self.theta)
-        u = c * x + s * y
-        v = -s * x + c * y
-        return u, v
+        return _rotated_local_coords(xy, self.x0, self.y0, self.theta)
 
     def _soft_indicator(self, coord, half_extent):
-        sharp = self.edge_sharpness
-        pos = jax.nn.sigmoid(sharp * (coord + half_extent))
-        neg = jax.nn.sigmoid(sharp * (coord - half_extent))
-        plateau = jax.nn.sigmoid(sharp * half_extent) - jax.nn.sigmoid(-sharp * half_extent)
-        plateau = jnp.maximum(plateau, 1e-9)
-        return (pos - neg) / plateau
+        return _soft_indicator(coord, half_extent, self.edge_sharpness)
 
     def phase_shift(self, xy):
         u, v = self._local_coords(xy)
@@ -1276,21 +1282,10 @@ class RandomPhaseSample(GaussianActionComponent):
         )
 
     def _local_coords(self, xy):
-        x = xy[..., 0] - self.x0
-        y = xy[..., 1] - self.y0
-        c = jnp.cos(self.theta)
-        s = jnp.sin(self.theta)
-        u = c * x + s * y
-        v = -s * x + c * y
-        return u, v
+        return _rotated_local_coords(xy, self.x0, self.y0, self.theta)
 
     def _soft_indicator(self, coord, half_extent):
-        sharp = self.edge_sharpness
-        pos = jax.nn.sigmoid(sharp * (coord + half_extent))
-        neg = jax.nn.sigmoid(sharp * (coord - half_extent))
-        plateau = jax.nn.sigmoid(sharp * half_extent) - jax.nn.sigmoid(-sharp * half_extent)
-        plateau = jnp.maximum(plateau, 1e-9)
-        return (pos - neg) / plateau
+        return _soft_indicator(coord, half_extent, self.edge_sharpness)
 
     def _hash(self, i, j):
         return jnp.mod(jnp.sin(127.1 * i + 311.7 * j) * 43758.5453, 1.0)
@@ -1458,9 +1453,7 @@ class AtomicPotential(Component):
         return self.phase_shift(xy, z, sigma, k) - 1j * (L / k)
 
     def _call_gaussian(self, ray: GaussianBeam) -> GaussianBeam:
-        if _is_batched_gaussian(ray):
-            return jax.vmap(self._call_gaussian_single)(ray.to_vector())
-        return self._call_gaussian_single(ray)
+        return _call_single_or_batched_gaussian(ray, self._call_gaussian_single)
 
     def _call_gaussian_single(self, ray: GaussianBeam) -> GaussianBeam:
         dS0, dS1, dS2 = taylor_expand(

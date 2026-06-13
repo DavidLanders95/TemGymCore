@@ -437,14 +437,17 @@ class FreeSpacePropagator(BaseGaussianPropagator):
     def __call__(self, ray: GaussianBeam, distance: float) -> GaussianBeam:
         theta = ray.d_xy
         Q = ray.Q_inv
+        distance = jnp.asarray(distance, dtype=jnp.float64)
+        distance_vec = distance[..., None]
+        distance_mat = distance[..., None, None]
 
         identity = jnp.eye(2, dtype=jnp.complex128)
-        A = identity + distance * Q
+        A = identity + distance_mat * Q
         invA = jnp.linalg.solve(A, jnp.broadcast_to(identity, A.shape))
         detA = jnp.linalg.det(A)
 
         Q_new = _matmul(Q, invA)
-        r_xy_new = ray.r_xy + distance * theta
+        r_xy_new = ray.r_xy + distance_vec * theta
 
         theta_sq = jnp.sum(theta * theta, axis=-1)
         pathlength_new = ray.pathlength + distance + 0.5 * distance * theta_sq
