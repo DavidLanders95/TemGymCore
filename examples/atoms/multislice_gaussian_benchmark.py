@@ -65,7 +65,8 @@ class MultisliceBenchmarkConfig:
     potential_tail_cutoff: float = 6.0
     projection_samples: int = 9
     fit_support_radius: float = 1.0
-    fit_samples_per_axis: int = 3
+    fit_samples_per_axis: int = 5
+    fit_weight_power: float | None = 1.0
     beam_chunk_size: int = 1792
     eval_method: str = "auto"
     eval_tile_pixels: int = 64
@@ -273,10 +274,10 @@ def build_action_grids(
     return jnp.stack(action_grids, axis=0), times
 
 
-def _bilinear_sample(image, xy, x0, y0, pixel_x, pixel_y):
+def _bilinear_sample(image, xy, x0, y0, step_x, step_y):
     h, w = image.shape
-    px = (xy[0] - x0) / pixel_x
-    py = (xy[1] - y0) / pixel_y
+    px = (xy[0] - x0) / step_x
+    py = (xy[1] - y0) / step_y
     px = jnp.clip(px, 0.0, w - 1.0)
     py = jnp.clip(py, 0.0, h - 1.0)
 
@@ -301,7 +302,7 @@ def _bilinear_sample(image, xy, x0, y0, pixel_x, pixel_y):
 
 @partial(
     jax.jit,
-    static_argnames=("fit_support_radius", "fit_samples_per_axis"),
+    static_argnames=("fit_support_radius", "fit_samples_per_axis", "fit_weight_power"),
 )
 def _apply_fitted_slice_to_vector(
     vector,
@@ -313,6 +314,7 @@ def _apply_fitted_slice_to_vector(
     element_params,
     fit_support_radius,
     fit_samples_per_axis,
+    fit_weight_power,
 ):
     def one_ray(ray):
         return apply_fitted_quadratic_action(
@@ -330,6 +332,7 @@ def _apply_fitted_slice_to_vector(
             ),
             fit_support_radius=fit_support_radius,
             fit_samples_per_axis=fit_samples_per_axis,
+            fit_weight_power=fit_weight_power,
         )
 
     return jax.vmap(one_ray)(vector)
@@ -337,24 +340,26 @@ def _apply_fitted_slice_to_vector(
 
 @partial(
     jax.jit,
-    static_argnames=("fit_support_radius", "fit_samples_per_axis"),
+    static_argnames=("fit_support_radius", "fit_samples_per_axis", "fit_weight_power"),
 )
 def _apply_fitted_action_grid_to_vector(
     vector,
     action_grid,
     x0,
     y0,
-    pixel_x,
-    pixel_y,
+    step_x,
+    step_y,
     fit_support_radius,
     fit_samples_per_axis,
+    fit_weight_power,
 ):
     def one_ray(ray):
         return apply_fitted_quadratic_action(
             ray,
-            lambda xy: _bilinear_sample(action_grid, xy, x0, y0, pixel_x, pixel_y),
+            lambda xy: _bilinear_sample(action_grid, xy, x0, y0, step_x, step_y),
             fit_support_radius=fit_support_radius,
             fit_samples_per_axis=fit_samples_per_axis,
+            fit_weight_power=fit_weight_power,
         )
 
     return jax.vmap(one_ray)(vector)
@@ -379,10 +384,11 @@ def apply_fitted_action_grid_chunked(
     *,
     x0: float,
     y0: float,
-    pixel_x: float,
-    pixel_y: float,
+    step_x: float,
+    step_y: float,
     fit_support_radius: float = 1.0,
-    fit_samples_per_axis: int = 3,
+    fit_samples_per_axis: int = 5,
+    fit_weight_power: float | None = 1.0,
     chunk_size: int = 2048,
 ) -> GaussianBeam:
     chunks = []
@@ -392,10 +398,11 @@ def apply_fitted_action_grid_chunked(
             action_grid,
             x0,
             y0,
-            pixel_x,
-            pixel_y,
+            step_x,
+            step_y,
             fit_support_radius,
             fit_samples_per_axis,
+            fit_weight_power,
         )
         chunks.append(block_until_ready(out.to_vector()))
     return _concat_chunks(chunks)
@@ -478,8 +485,8 @@ def gaussian_multislice(
     x_coords, y_coords = grid.coords_1d
     x0 = x_coords[0]
     y0 = y_coords[0]
-    pixel_x = grid.pixel_size[1]
-    pixel_y = grid.pixel_size[0]
+    step_x = x_coords[1] - x_coords[0]
+    step_y = y_coords[1] - y_coords[0]
 
     for slice_index in range(action_grid_stack.shape[0]):
         current, t_action = timed_call(
@@ -488,10 +495,11 @@ def gaussian_multislice(
                 action_grid,
                 x0=x0,
                 y0=y0,
-                pixel_x=pixel_x,
-                pixel_y=pixel_y,
+                step_x=step_x,
+                step_y=step_y,
                 fit_support_radius=config.fit_support_radius,
                 fit_samples_per_axis=config.fit_samples_per_axis,
+                fit_weight_power=config.fit_weight_power,
                 chunk_size=config.beam_chunk_size,
             )
         )
@@ -1115,7 +1123,8 @@ def full_config() -> MultisliceBenchmarkConfig:
         grid_shape=192,
         target_beams_side=224,
         beam_chunk_size=1792,
-        fit_samples_per_axis=3,
+        fit_samples_per_axis=5,
+        fit_weight_power=1.0,
         fit_support_radius=1.0,
         reference_jit=os.environ.get("TEMGYM_REFERENCE_JIT", "1") != "0",
     )
