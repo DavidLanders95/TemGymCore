@@ -123,6 +123,34 @@ def _matmul(left: jnp.ndarray, right: jnp.ndarray) -> jnp.ndarray:
     return jnp.einsum("...ij,...jk->...ik", left, right)
 
 
+def _det_2x2(matrix: jnp.ndarray) -> jnp.ndarray:
+    return matrix[..., 0, 0] * matrix[..., 1, 1] - matrix[..., 0, 1] * matrix[..., 1, 0]
+
+
+def _inverse_2x2(matrix: jnp.ndarray) -> jnp.ndarray:
+    a = matrix[..., 0, 0]
+    b = matrix[..., 0, 1]
+    c = matrix[..., 1, 0]
+    d = matrix[..., 1, 1]
+    det = a * d - b * c
+    adjugate = jnp.stack(
+        (
+            jnp.stack((d, -b), axis=-1),
+            jnp.stack((-c, a), axis=-1),
+        ),
+        axis=-2,
+    )
+    return adjugate / det[..., None, None]
+
+
+def _solve_2x2(matrix: jnp.ndarray, rhs: jnp.ndarray) -> jnp.ndarray:
+    inverse = _inverse_2x2(matrix)
+    rhs = jnp.asarray(rhs)
+    if rhs.ndim == matrix.ndim - 1:
+        return jnp.einsum("...ij,...j->...i", inverse, rhs)
+    return _matmul(inverse, rhs)
+
+
 @jdc.pytree_dataclass(kw_only=True)
 class GaussianBeam(Ray):
     amplitude: jnp.ndarray | complex
@@ -385,13 +413,13 @@ def _apply_action_delta_single(
 
     def solve_dx(args):
         ImQ_, ImS1_ = args
-        return jnp.linalg.solve(ImQ_, -ImS1_)
+        return _solve_2x2(ImQ_, -ImS1_)
 
     def zero_dx(args):
         _, ImS1_ = args
         return jnp.zeros_like(ImS1_)
 
-    det_ImQ = jnp.linalg.det(ImQ)
+    det_ImQ = _det_2x2(ImQ)
     dx = lax.cond(
         jnp.abs(det_ImQ) < tiny,
         zero_dx,
@@ -443,8 +471,8 @@ class FreeSpacePropagator(BaseGaussianPropagator):
 
         identity = jnp.eye(2, dtype=jnp.complex128)
         A = identity + distance_mat * Q
-        invA = jnp.linalg.solve(A, jnp.broadcast_to(identity, A.shape))
-        detA = jnp.linalg.det(A)
+        invA = _inverse_2x2(A)
+        detA = _det_2x2(A)
 
         Q_new = _matmul(Q, invA)
         r_xy_new = ray.r_xy + distance_vec * theta
@@ -463,6 +491,13 @@ class FreeSpacePropagator(BaseGaussianPropagator):
             pathlength=pathlength_new,
             Q_inv=Q_new,
         )
+
+
+def _propagate_free_space_impl(ray: GaussianBeam, distance: float) -> GaussianBeam:
+    return FreeSpacePropagator()(ray, distance)
+
+
+propagate_free_space_jit = jax.jit(_propagate_free_space_impl)
 
 
 _REMOVED_SYMBOL_TO_PATH = {
@@ -519,4 +554,5 @@ __all__ = [
     "Propagator",
     "BaseGaussianPropagator",
     "FreeSpacePropagator",
+    "propagate_free_space_jit",
 ]

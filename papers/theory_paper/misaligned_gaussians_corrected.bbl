@@ -1,0 +1,43 @@
+\begin{thebibliography}{1}
+
+\bibitem{ashcraft_hybrid_2023}
+Jaren~N. Ashcraft, Ewan~S. Douglas, Daewook Kim, and A.~J.~Eldorado Riggs.
+\newblock Hybrid propagation physics for the design and modeling of
+  astronomical observatories: a coronagraphic example.
+\newblock {\em Journal of Astronomical Telescopes, Instruments, and Systems},
+  9(4):048003, November 2023.
+\newblock Publisher: SPIE.
+
+\bibitem{deschamps_gaussian_1971}
+G.~A. Deschamps.
+\newblock Gaussian beam as a bundle of complex rays.
+\newblock {\em Electronics Letters}, 7(23):684--685, November 1971.
+\newblock Publisher: IET Digital Library.
+
+\bibitem{weber_collins_2006}
+H.~Weber.
+\newblock Collins’ integral for misaligned optical elements.
+\newblock {\em Journal of Modern Optics}, 53(18):2793--2801, December 2006.
+
+\bibitem{cai_propagation_2003}
+Yangjian Cai and Qiang Lin.
+\newblock Propagation of elliptical {Hermite}–{Gaussian} beam through
+  misaligned optical system.
+\newblock {\em Optics Communications}, 224(1):13--19, August 2003.
+
+\bibitem{ashcraft_generalized_2024}
+Jaren~N. Ashcraft, Ewan~S. Douglas, Ramya Anche, Brandon~D. Dube, Kevin~Z.
+  Derby, Lars Furenlid, Maggie Kautz, Daewook Kim, Kian Milani, and
+  A.~J.~Eldorado Riggs.
+\newblock A generalized expression for accelerating beamlet decomposition
+  simulations.
+\newblock {\em Optics Express}, 32(10):18068--18086, May 2024.
+\newblock Publisher: Optica Publishing Group.
+
+\bibitem{siegman_lasers_1986}
+A.~E. Siegman.
+\newblock {\em Lasers}.
+\newblock University Science Books, 1986.
+\newblock Google-Books-ID: 1BZVwUZLTkAC.
+
+\end{thebibliography}

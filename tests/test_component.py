@@ -22,6 +22,7 @@ from temgym_core.components import (
     InterpolatedSample2D,
     MagneticPhaseSample,
     RandomPhaseSample,
+    WaffleGrating,
     sample_interpolant,
     AtomicPotential,
 )
@@ -140,6 +141,59 @@ def test_rotated_sample_coordinate_helpers_are_shared_consistently():
         np.asarray(random._soft_indicator(rand_u, 1.0)),
         atol=1e-12,
     )
+
+
+def test_waffle_grating_periodic_transmission_regions():
+    grating = WaffleGrating(
+        width=4.0,
+        height=4.0,
+        period=1.0,
+        hole_width=0.5,
+        hole_height=0.5,
+        edge_sharpness=80.0,
+        t_hole=1.0,
+        t_bar=0.2,
+        t_outside=0.05,
+    )
+
+    xy = jnp.array([
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.45, 0.0],
+        [3.0, 0.0],
+    ])
+    transmission = np.asarray(grating.transmission(xy))
+
+    assert transmission[0] == pytest.approx(1.0, abs=1e-8)
+    assert transmission[1] == pytest.approx(transmission[0], abs=1e-8)
+    assert transmission[2] == pytest.approx(0.2, abs=1e-6)
+    assert transmission[3] == pytest.approx(0.05, abs=1e-6)
+
+
+def test_waffle_grating_attenuates_gaussian_beamlets():
+    grating = WaffleGrating(
+        width=4.0,
+        height=4.0,
+        period=1.0,
+        hole_width=0.5,
+        hole_height=0.5,
+        edge_sharpness=80.0,
+        t_hole=1.0,
+        t_bar=0.2,
+    )
+    beam = make_gaussian(
+        x=jnp.array([0.0, 0.45]),
+        y=jnp.array([0.0, 0.0]),
+        z=jnp.array([0.0, 0.0]),
+        voltage=jnp.array([200e3, 200e3]),
+        waist_x=jnp.array([0.05, 0.05]),
+        waist_y=jnp.array([0.05, 0.05]),
+    )
+
+    out = grating(beam)
+
+    assert np.all(np.isfinite(np.asarray(out.amplitude)))
+    assert np.abs(np.asarray(out.amplitude[1])) < np.abs(np.asarray(out.amplitude[0]))
 
 
 @jdc.pytree_dataclass

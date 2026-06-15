@@ -1,4 +1,4 @@
-"""Small CPU diagnostic for fitted Gaussian atom-slice propagation.
+"""Small diagnostic for fitted Gaussian atom-slice propagation.
 
 The reference is a one-slice multislice-style grid calculation:
 
@@ -14,8 +14,7 @@ import os
 import time
 
 os.environ.setdefault("JAX_ENABLE_X64", "1")
-os.environ["JAX_PLATFORM_NAME"] = "cpu"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.4")
 
 import jax
 import jax.numpy as jnp

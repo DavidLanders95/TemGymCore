@@ -167,6 +167,38 @@ def evaluate_gaussians_gpu_kernel_wrapper(
     return fld.reshape(grid.shape)
 
 
+def evaluate_gaussians_fast(
+    gaussian_ray,
+    grid: Grid,
+    *,
+    method: str = "auto",
+    batch_size: int | None = 128,
+    tile_pixels: int = 64,
+    tile_beams: int = 16,
+):
+    """Evaluate a Gaussian bundle with the fastest available local backend."""
+
+    if method == "auto":
+        method = "gpu_kernel" if jax.default_backend() == "gpu" else "scan"
+
+    if method == "gpu_kernel":
+        return evaluate_gaussians_gpu_kernel_wrapper(
+            gaussian_ray,
+            grid,
+            tile_pixels=tile_pixels,
+            tile_beams=tile_beams,
+        )
+    if method == "scan":
+        return evaluate_gaussians_jax_scan(
+            gaussian_ray,
+            grid,
+            batch_size=batch_size,
+        )
+    if method == "loop":
+        return evaluate_gaussians_for(gaussian_ray, grid)
+    raise ValueError(f"Unknown Gaussian evaluation method {method!r}")
+
+
 evaluate_gaussians_gpu_kernel = jax.jit(
     evaluate_gaussians_gpu_kernel, static_argnames=["tile_pixels", "tile_beams"]
 )

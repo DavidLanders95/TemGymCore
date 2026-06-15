@@ -16,6 +16,8 @@ from . import CoordsXY, Degrees, ScaleYX, ShapeYX
 from .gaussian import (
     FreeSpacePropagator,
     GaussianBeam,
+    _inverse_2x2,
+    _solve_2x2,
     apply_action_delta,
     taylor_expand,
 )
@@ -193,7 +195,7 @@ class GaussianActionComponent(Component):
         # breaks down.  Smoothly suppress L1 and L2 via s = 1/(1+r) so
         # the method gracefully degrades to pointwise-only transmission.
         ImQ = jnp.imag(ray.Q_inv)
-        dx_est = jnp.linalg.solve(ImQ, L1) / k
+        dx_est = _solve_2x2(ImQ, L1) / k
         ratio = jnp.dot(L1, dx_est)          # L1^T Im(Q)^{-1} L1 / k  (≥ 0)
         scale = 1.0 / (1.0 + ratio)
         L1_eff = L1 * scale
@@ -1021,11 +1023,7 @@ class ABCDTransfer(Component):
         Q = ray.Q_inv
         denom = A + _matmat(B, Q)
         numer = C + _matmat(D, Q)
-        eye = jnp.eye(2, dtype=jnp.complex128)
-        inv_denom = jnp.linalg.solve(
-            denom,
-            jnp.broadcast_to(eye, denom.shape),
-        )
+        inv_denom = _inverse_2x2(denom)
         Q_new = jnp.einsum("...ij,...jk->...ik", numer, inv_denom)
 
         return ray.derive(
@@ -1333,6 +1331,77 @@ class RandomPhaseSample(GaussianActionComponent):
 
 
 @jdc.pytree_dataclass(kw_only=True)
+class WaffleGrating(GaussianActionComponent):
+    """Finite periodic square-hole transmission grating for Gaussian beams."""
+
+    width: float
+    height: float
+    period: float
+    hole_width: float | None = None
+    hole_height: float | None = None
+    hole_fraction: float = 0.6
+    x0: float = 0.0
+    y0: float = 0.0
+    theta: float = 0.0
+    edge_sharpness: float = 5e6
+    t_hole: float = 1.0
+    t_bar: float = 0.0
+    t_outside: float = 0.0
+    eps: float = 1e-15
+    z: float = 0.0
+
+    def _call_ray(self, ray: Ray):
+        raise NotImplementedError(
+            "WaffleGrating is only implemented for gaussian beams."
+        )
+
+    def _local_coords(self, xy):
+        return _rotated_local_coords(xy, self.x0, self.y0, self.theta)
+
+    def _soft_indicator(self, coord, half_extent):
+        return _soft_indicator(coord, half_extent, self.edge_sharpness)
+
+    def _periodic_cell_coord(self, coord):
+        period = jnp.maximum(self.period, self.eps)
+        return jnp.mod(coord + 0.5 * period, period) - 0.5 * period
+
+    def _hole_size(self):
+        period = jnp.maximum(self.period, self.eps)
+        hole_width = self.hole_width
+        if hole_width is None:
+            hole_width = self.hole_fraction * period
+        hole_height = self.hole_height
+        if hole_height is None:
+            hole_height = self.hole_fraction * period
+        hole_width = jnp.clip(hole_width, self.eps, period)
+        hole_height = jnp.clip(hole_height, self.eps, period)
+        return hole_width, hole_height
+
+    def transmission(self, xy):
+        u, v = self._local_coords(xy)
+
+        support = (
+            self._soft_indicator(u, 0.5 * self.width)
+            * self._soft_indicator(v, 0.5 * self.height)
+        )
+
+        uc = self._periodic_cell_coord(u)
+        vc = self._periodic_cell_coord(v)
+        hole_width, hole_height = self._hole_size()
+        hole = (
+            self._soft_indicator(uc, 0.5 * hole_width)
+            * self._soft_indicator(vc, 0.5 * hole_height)
+        )
+
+        grating = self.t_bar + (self.t_hole - self.t_bar) * hole
+        t = self.t_outside + (grating - self.t_outside) * support
+        return jnp.clip(t, self.eps, None)
+
+    def log_transmission(self, xy):
+        return jnp.log(self.transmission(xy))
+
+
+@jdc.pytree_dataclass(kw_only=True)
 class InterpolatedSample2D(GaussianActionComponent):
     interpolator: Interpolator2D
     method: jdc.Static[str] = "catmull-rom"
@@ -1547,6 +1616,7 @@ __all__ = [
     "QuadraticAmplitudeShift",
     "MagneticPhaseSample",
     "RandomPhaseSample",
+    "WaffleGrating",
     "InterpolatedSample2D",
     "sample_interpolant",
     "InterpolatedFields3D",
